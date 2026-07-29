@@ -1,0 +1,832 @@
+<!DOCTYPE html>
+<html lang="ja" class="h-full bg-sky-100 text-slate-800">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>わくわく おんがくプレイヤー</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        /* カスタムスクロールバー */
+        ::-webkit-scrollbar {
+            width: 6px;
+        }
+        ::-webkit-scrollbar-track {
+            background: rgba(15, 23, 42, 0.6);
+        }
+        ::-webkit-scrollbar-thumb {
+            background: rgba(51, 65, 85, 0.8);
+            border-radius: 3px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: rgba(71, 85, 105, 1);
+        }
+        
+        /* レンジ入力のカスタマイズ */
+        input[type="range"] {
+            -webkit-appearance: none;
+            appearance: none;
+            background: transparent;
+            cursor: pointer;
+        }
+        input[type="range"]::-webkit-slider-runnable-track {
+            background: rgba(51, 65, 85, 0.5);
+            height: 6px;
+            border-radius: 3px;
+        }
+        input[type="range"]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            appearance: none;
+            margin-top: -5px;
+            background-color: #38bdf8;
+            height: 16px;
+            width: 16px;
+            border-radius: 50%;
+            transition: transform 0.1s ease;
+        }
+        input[type="range"]::-webkit-slider-thumb:hover {
+            transform: scale(1.2);
+            background-color: #7dd3fc;
+        }
+        
+        /* ディスク回転アニメーション */
+        @keyframes spin-slow {
+            from { transform: rotate(0deg); }
+            to { transform: rotate(360deg); }
+        }
+        .animate-spin-slow {
+            animation: spin-slow 20s linear infinite;
+        }
+        .paused-spin {
+            animation-play-state: paused;
+        }
+
+        /* iPad / iOS タッチ最適化 */
+        button, div, input {
+            -webkit-tap-highlight-color: transparent;
+            touch-action: manipulation;
+        }
+    
+        /* 低学年向け：大きく、明るく、押しやすく */
+        button { min-width: 48px; min-height: 48px; }
+        button:active { transform: scale(.94); }
+        #playlist-items li { font-size: 1.05rem; }
+        #seek-bar::-webkit-slider-thumb, #volume-bar::-webkit-slider-thumb { width: 24px; height: 24px; margin-top: -9px; }
+        #seek-bar::-webkit-slider-runnable-track, #volume-bar::-webkit-slider-runnable-track { height: 10px; border-radius: 999px; background: #bae6fd; }
+    </style>
+</head>
+<body class="h-full flex flex-col font-sans antialiased select-none overflow-hidden bg-gradient-to-br from-sky-100 via-yellow-50 to-pink-100">
+
+    <!-- メインコンテナ -->
+    <div class="flex-1 flex flex-col lg:flex-row h-[calc(100dvh-146px)] sm:h-[calc(100dvh-122px)] overflow-hidden">
+        
+        <!-- 左側：プレーヤー & ビジュアライザー -->
+        <div class="w-full lg:w-5/12 p-4 lg:p-6 flex flex-col justify-between items-center border-b lg:border-b-0 lg:border-r border-sky-200 bg-white/75 backdrop-blur-md overflow-y-auto">
+            
+            <!-- アプリタイトル -->
+            <div class="w-full flex justify-between items-center mb-4">
+                <div class="flex items-center space-x-2">
+                    <div class="p-2 bg-yellow-300 text-orange-600 rounded-lg">
+                        <svg class="w-6 h-6 pointer-events-none" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M6 12c0-3.3 2.7-6 6-6s6 2.7 6 6-2.7 6-6 6-6-2.7-6-6z"/><circle cx="12" cy="12" r="2"/></svg>
+                    </div>
+                    <span class="font-black text-2xl tracking-wide text-sky-700">♪ わくわく おんがく ♪</span>
+                </div>
+                <div class="text-sm font-bold text-sky-700 bg-white px-3 py-1.5 rounded-full border-2 border-sky-200 shadow-sm" id="playlist-stats">
+                    0 曲 (0:00)
+                </div>
+            </div>
+
+            <!-- ビジュアルディスプレイ -->
+            <div class="relative w-full max-w-sm aspect-square my-auto flex items-center justify-center">
+                <!-- アナライザーキャンバス -->
+                <canvas id="visualizer" class="absolute inset-0 w-full h-full rounded-3xl opacity-40 pointer-events-none"></canvas>
+                
+                <!-- ディスク風ビジュアル -->
+                <div class="relative w-48 h-48 sm:w-64 sm:h-64 rounded-full bg-sky-200 border-8 border-white shadow-2xl flex items-center justify-center p-2 group transition-all duration-300">
+                    <div id="vinyl-disc" class="w-full h-full rounded-full border-8 border-sky-500 flex items-center justify-center shadow-inner animate-spin-slow paused-spin bg-[radial-gradient(ellipse_at_center,_var(--tw-gradient-stops))] from-sky-400 via-indigo-500 to-purple-700">
+                        <div class="w-20 h-20 sm:w-24 sm:h-24 rounded-full bg-gradient-to-tr from-yellow-300 to-orange-400 flex items-center justify-center p-1 shadow-lg">
+                            <div class="w-6 h-6 sm:w-8 sm:h-8 rounded-full bg-white border-2 border-orange-300 flex items-center justify-center">
+                                <div class="w-2 h-2 rounded-full bg-white/80"></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 現在再生中の曲情報 -->
+            <div class="w-full text-center my-4">
+                <h2 id="current-title" class="text-2xl font-black text-sky-800 truncate px-4">
+                    まだ きょくを えらんでいません
+                </h2>
+                <p id="current-artist" class="text-base font-bold text-slate-600 mt-1 truncate">
+                    したのボタンから おんがくを いれてね
+                </p>
+            </div>
+
+            <!-- ファイル選択エリア -->
+            <div id="drop-zone" class="w-full p-5 border-4 border-dashed border-sky-400 hover:border-pink-400 rounded-3xl bg-white/90 hover:bg-yellow-50 transition-all text-center cursor-pointer mb-2 active:scale-[0.99]">
+                <input type="file" id="file-input" multiple accept=".mp3,.m4a,.aac,.wav,.ogg,.flac,audio/*" class="hidden">
+                <div class="flex flex-col items-center pointer-events-none">
+                    <svg class="w-10 h-10 text-pink-500 mb-2 pointer-events-none" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2"><path d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"/></svg>
+                    <p class="text-lg text-sky-800 font-black pointer-events-none">ここを おして おんがくを えらぶ</p>
+                    <p class="text-sm text-slate-500 mt-1 pointer-events-none">iPadの「ファイル」から えらべるよ</p>
+                </div>
+            </div>
+
+        </div>
+
+        <!-- 右側：プレイリスト -->
+        <div class="w-full lg:w-7/12 flex flex-col h-full bg-white/70">
+            <!-- プレイリストヘッダー -->
+            <div class="p-4 border-b-2 border-sky-200 flex items-center justify-between bg-sky-50/90">
+                <div class="flex items-center space-x-2">
+                    <svg class="w-7 h-7 text-pink-500 pointer-events-none" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2"><path d="M9 18V5l12-2v13M9 9l12-2"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>
+                    <h3 class="font-black text-xl text-sky-800">おんがくの ならび</h3>
+                </div>
+                <div class="flex items-center space-x-2">
+                    <button id="btn-clear-all" type="button" class="text-xs px-3 py-1.5 rounded-lg text-slate-400 hover:text-red-400 hover:bg-slate-800/60 transition flex items-center gap-1 border border-transparent hover:border-slate-700">
+                        <svg class="w-3.5 h-3.5 pointer-events-none" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2"><path d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
+                        <span class="pointer-events-none">ぜんぶ けす</span>
+                    </button>
+                </div>
+            </div>
+
+            <!-- プレイリスト一覧 -->
+            <div class="flex-1 overflow-y-auto p-2 sm:p-4" id="playlist-container">
+                <div id="empty-state" class="h-full flex flex-col items-center justify-center text-sky-600 py-12">
+                    <svg class="w-16 h-16 stroke-1 mb-3 text-slate-600 pointer-events-none" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M9 19V6l12-2v13M9 9l12-2"/><circle cx="6" cy="19" r="3"/><circle cx="18" cy="17" r="3"/></svg>
+                    <p class="text-xl font-black">まだ おんがくが ないよ</p>
+                    <p class="text-base text-slate-500 mt-2">ひだりのボタンから えらんでね</p>
+                </div>
+                <ul id="playlist-items" class="space-y-1"></ul>
+            </div>
+        </div>
+
+    </div>
+
+    <!-- 下部：プレーヤーコントロールバー -->
+    <footer class="min-h-[146px] sm:min-h-[122px] bg-white/95 border-t-4 border-sky-300 px-3 sm:px-6 py-2 flex flex-col justify-center backdrop-blur-lg z-20">
+        <!-- プログレスバー & 時間表示 -->
+        <div class="w-full flex items-center space-x-3 mb-1.5">
+            <span id="time-current" class="text-sm font-black font-mono text-sky-700 w-12 text-right">0:00</span>
+            <div class="relative flex-1 flex items-center">
+                <input type="range" id="seek-bar" min="0" max="100" value="0" step="0.1" class="w-full h-1.5 rounded-lg appearance-none bg-slate-800 focus:outline-none">
+            </div>
+            <span id="time-duration" class="text-sm font-black font-mono text-sky-700 w-12">0:00</span>
+        </div>
+
+        <!-- 操作ボタン群 -->
+        <div class="grid grid-cols-2 sm:grid-cols-[1fr_auto_1fr] items-center gap-2 sm:gap-3">
+            
+            <!-- シャッフル & リピート (左: iPadタッチ完全対応) -->
+            <div class="col-span-2 sm:col-span-1 flex items-center justify-center sm:justify-start gap-2 min-w-0">
+                <!-- シャッフルボタン -->
+                <button id="btn-shuffle" type="button" title="ばらばらに ならべる" class="relative z-30 flex flex-1 sm:flex-none items-center justify-center gap-2 min-h-[52px] px-4 py-3 rounded-2xl border-2 border-sky-300 bg-white text-sky-700 shadow-md transition cursor-pointer select-none touch-manipulation font-black">
+                    <svg class="w-4 h-4 pointer-events-none shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2"><path d="M16 3h5v5M4 20L21 3M21 16v5h-5M15 15l6 6M4 4l5 5"/></svg>
+                    <span id="shuffle-label" class="text-sm font-black pointer-events-none">ばらばら OFF</span>
+                </button>
+                
+                <!-- リピートボタン -->
+                <button id="btn-repeat" type="button" title="くりかえしを えらぶ" class="relative z-30 flex flex-1 sm:flex-none items-center justify-center gap-2 min-h-[52px] px-4 py-3 rounded-2xl border-2 border-sky-300 bg-white text-sky-700 shadow-md transition cursor-pointer select-none touch-manipulation font-black">
+                    <svg id="icon-repeat" class="w-4 h-4 pointer-events-none shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2"><path d="M17 1l4 4-4 4"/><path d="M3 11V9a4 4 0 014-4h14M7 23l-4-4 4-4"/><path d="M21 13v2a4 4 0 01-4 4H3"/></svg>
+                    <span id="repeat-label" class="text-sm font-black pointer-events-none">くりかえし OFF</span>
+                </button>
+            </div>
+
+            <!-- メインコントロール (中央) -->
+            <div class="flex items-center justify-center gap-2 sm:gap-4">
+                <button id="btn-prev" type="button" class="p-4 text-sky-700 hover:text-sky-900 hover:bg-sky-100 rounded-full bg-white border-2 border-sky-200 shadow-sm transition active:scale-95">
+                    <svg class="w-7 h-7 pointer-events-none" fill="currentColor" viewBox="0 0 24 24"><path d="M6 6h2v12H6zm3.5 6l8.5 6V6z"/></svg>
+                </button>
+                <button id="btn-play" type="button" class="p-5 bg-pink-500 hover:bg-pink-400 text-white rounded-full border-4 border-white transition shadow-lg shadow-indigo-600/30 active:scale-95">
+                    <svg id="icon-play" class="w-9 h-9 fill-current pointer-events-none" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
+                    <svg id="icon-pause" class="w-9 h-9 fill-current pointer-events-none hidden" viewBox="0 0 24 24"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg>
+                </button>
+                <button id="btn-next" type="button" class="p-4 text-sky-700 hover:text-sky-900 hover:bg-sky-100 rounded-full bg-white border-2 border-sky-200 shadow-sm transition active:scale-95">
+                    <svg class="w-7 h-7 pointer-events-none" fill="currentColor" viewBox="0 0 24 24"><path d="M6 18l8.5-6L6 6v12zM16 6v12h2V6h-2z"/></svg>
+                </button>
+            </div>
+
+            <!-- ボリュームコントロール (右) -->
+            <div class="flex items-center justify-end gap-1.5 sm:gap-2 min-w-0">
+                <button id="btn-mute" type="button" class="p-1.5 text-slate-400 hover:text-slate-200">
+                    <svg id="icon-vol-on" class="w-4 h-4 pointer-events-none" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2"><path d="M11 5L6 9H2v6h4l5 4V5zM19.07 4.93a10 10 0 010 14.14M15.54 8.46a5 5 0 010 7.07"/></svg>
+                    <svg id="icon-vol-off" class="w-4 h-4 pointer-events-none hidden text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2"><path d="M11 5L6 9H2v6h4l5 4V5zM23 9l-6 6M17 9l6 6"/></svg>
+                </button>
+                <input type="range" id="volume-bar" min="0" max="1" value="0.8" step="0.01" class="w-14 sm:w-24 h-1.5 rounded-lg appearance-none bg-slate-800 focus:outline-none">
+            </div>
+
+        </div>
+    </footer>
+
+    <!-- HTML5 Audio -->
+    <audio id="audio-player" class="hidden" playsinline></audio>
+
+    <!-- JavaScript Logic -->
+    <script>
+        // アプリケーション状態管理
+        const state = {
+            playlist: [],          
+            currentIndex: -1,      
+            isPlaying: false,
+            isShuffle: false,
+            repeatMode: 0,         // 0: オフ, 1: 全曲リピート, 2: 1曲リピート
+            volume: 0.8,
+            isMuted: false,
+            shuffleOrder: []       
+        };
+
+        // DOM要素参照
+        const audio = document.getElementById('audio-player');
+        const dropZone = document.getElementById('drop-zone');
+        const fileInput = document.getElementById('file-input');
+        const playlistContainer = document.getElementById('playlist-items');
+        const emptyState = document.getElementById('empty-state');
+        const playlistStats = document.getElementById('playlist-stats');
+        
+        // UIコントロール参照
+        const btnPlay = document.getElementById('btn-play');
+        const iconPlay = document.getElementById('icon-play');
+        const iconPause = document.getElementById('icon-pause');
+        const btnPrev = document.getElementById('btn-prev');
+        const btnNext = document.getElementById('btn-next');
+        
+        const btnShuffle = document.getElementById('btn-shuffle');
+        const shuffleLabel = document.getElementById('shuffle-label');
+        
+        const btnRepeat = document.getElementById('btn-repeat');
+        const repeatLabel = document.getElementById('repeat-label');
+        
+        const btnMute = document.getElementById('btn-mute');
+        const iconVolOn = document.getElementById('icon-vol-on');
+        const iconVolOff = document.getElementById('icon-vol-off');
+        const btnClearAll = document.getElementById('btn-clear-all');
+        
+        const seekBar = document.getElementById('seek-bar');
+        const volumeBar = document.getElementById('volume-bar');
+        const timeCurrent = document.getElementById('time-current');
+        const timeDuration = document.getElementById('time-duration');
+        
+        const currentTitle = document.getElementById('current-title');
+        const currentArtist = document.getElementById('current-artist');
+        const vinylDisc = document.getElementById('vinyl-disc');
+        const canvas = document.getElementById('visualizer');
+        const canvasCtx = canvas.getContext('2d');
+
+        // Web Audio API用変数
+        let audioCtx = null;
+        let analyser = null;
+        let sourceNode = null;
+
+        // 初期化
+        window.addEventListener('DOMContentLoaded', () => {
+            setupEventListeners();
+            resizeCanvas();
+            updateModeButtonsUI();
+        });
+
+        window.addEventListener('resize', resizeCanvas);
+
+        function resizeCanvas() {
+            canvas.width = canvas.parentElement.clientWidth;
+            canvas.height = canvas.parentElement.clientHeight;
+        }
+
+        // iPad / iPhone / PC 共通の安全なタップ処理
+        function addTapListener(element, callback) {
+            if (!element) return;
+
+            element.addEventListener('click', (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                callback(e);
+            });
+        }
+
+        // イベントリスナー設定
+        function setupEventListeners() {
+            dropZone.addEventListener('click', () => fileInput.click());
+
+            dropZone.addEventListener('dragover', (e) => {
+                e.preventDefault();
+                dropZone.classList.add('border-indigo-500', 'bg-indigo-950/30');
+            });
+            dropZone.addEventListener('dragleave', () => {
+                dropZone.classList.remove('border-indigo-500', 'bg-indigo-950/30');
+            });
+            dropZone.addEventListener('drop', (e) => {
+                e.preventDefault();
+                dropZone.classList.remove('border-indigo-500', 'bg-indigo-950/30');
+                if (e.dataTransfer.files.length > 0) {
+                    addFiles(e.dataTransfer.files);
+                }
+            });
+
+            fileInput.addEventListener('change', (e) => {
+                if (e.target.files.length > 0) {
+                    addFiles(e.target.files);
+                    fileInput.value = '';
+                }
+            });
+
+            // 再生コントロール
+            addTapListener(btnPlay, togglePlay);
+            addTapListener(btnPrev, playPrevious);
+            addTapListener(btnNext, playNext);
+            
+            // iPad対応シャッフル & リピート
+            addTapListener(btnShuffle, toggleShuffle);
+            addTapListener(btnRepeat, toggleRepeat);
+            
+            addTapListener(btnClearAll, clearPlaylist);
+
+            // オーディオイベント
+            audio.addEventListener('timeupdate', updateProgress);
+            audio.addEventListener('loadedmetadata', onMetadataLoaded);
+            audio.addEventListener('ended', onTrackEnded);
+
+            // シークバー
+            seekBar.addEventListener('input', () => {
+                if (audio.duration) {
+                    const seekTime = (seekBar.value / 100) * audio.duration;
+                    audio.currentTime = seekTime;
+                }
+            });
+
+            // 音量バー
+            volumeBar.addEventListener('input', (e) => {
+                state.volume = parseFloat(e.target.value);
+                audio.volume = state.volume;
+                state.isMuted = state.volume === 0;
+                updateVolumeUI();
+            });
+
+            addTapListener(btnMute, () => {
+                state.isMuted = !state.isMuted;
+                audio.muted = state.isMuted;
+                updateVolumeUI();
+            });
+        }
+
+        // Web Audio API 初期化
+        function initAudioContext() {
+            if (audioCtx) return;
+            try {
+                const AudioContext = window.AudioContext || window.webkitAudioContext;
+                audioCtx = new AudioContext();
+                analyser = audioCtx.createAnalyser();
+                analyser.fftSize = 64;
+                
+                sourceNode = audioCtx.createMediaElementSource(audio);
+                sourceNode.connect(analyser);
+                analyser.connect(audioCtx.destination);
+                
+                drawVisualizer();
+            } catch (e) {
+                console.log('Web Audio API Initialization Fallback');
+            }
+        }
+
+        // ファイル追加関数
+        function addFiles(files) {
+            const newTracks = [];
+
+            Array.from(files).forEach((file) => {
+                const isAudio = file.type.startsWith('audio/') || 
+                                file.name.match(/\.(mp3|m4a|aac|wav|ogg|flac)$/i);
+                
+                if (!isAudio) return;
+
+                const url = URL.createObjectURL(file);
+                const track = {
+                    id: 'track-' + Date.now() + '-' + Math.random().toString(36).substr(2, 9),
+                    name: formatFileName(file.name),
+                    rawName: file.name,
+                    file: file,
+                    url: url,
+                    duration: 0
+                };
+
+                const tempAudio = new Audio(url);
+                tempAudio.addEventListener('loadedmetadata', () => {
+                    track.duration = tempAudio.duration;
+                    updatePlaylistStats();
+                    renderPlaylist();
+                });
+
+                newTracks.push(track);
+            });
+
+            if (newTracks.length > 0) {
+                const wasEmpty = state.playlist.length === 0;
+                state.playlist.push(...newTracks);
+                updateShuffleOrder();
+                renderPlaylist();
+                updatePlaylistStats();
+
+                if (wasEmpty && state.playlist.length > 0) {
+                    selectTrack(0, false);
+                }
+            }
+        }
+
+        function formatFileName(filename) {
+            return filename.replace(/\.[^/.]+$/, "");
+        }
+
+        // 曲順入れ替え
+        function moveTrack(fromIndex, toIndex) {
+            if (toIndex < 0 || toIndex >= state.playlist.length) return;
+            
+            const currentTrack = state.currentIndex >= 0 ? state.playlist[state.currentIndex] : null;
+
+            const [movedTrack] = state.playlist.splice(fromIndex, 1);
+            state.playlist.splice(toIndex, 0, movedTrack);
+
+            if (currentTrack) {
+                state.currentIndex = state.playlist.findIndex(t => t.id === currentTrack.id);
+            }
+
+            updateShuffleOrder();
+            renderPlaylist();
+        }
+
+        // プレイリスト描画
+        function renderPlaylist() {
+            if (state.playlist.length === 0) {
+                emptyState.classList.remove('hidden');
+                playlistContainer.innerHTML = '';
+                playlistContainer.appendChild(emptyState);
+                return;
+            }
+
+            emptyState.classList.add('hidden');
+            playlistContainer.innerHTML = '';
+
+            const ul = document.createElement('ul');
+            ul.className = 'space-y-1.5';
+
+            state.playlist.forEach((track, index) => {
+                const isCurrent = index === state.currentIndex;
+                const isFirst = index === 0;
+                const isLast = index === state.playlist.length - 1;
+                
+                const li = document.createElement('li');
+                
+                li.className = `group flex items-center justify-between p-2.5 sm:p-3 rounded-xl transition duration-200 ${
+                    isCurrent 
+                        ? 'bg-yellow-100 border-4 border-yellow-300 text-slate-800 shadow-md' 
+                        : 'hover:bg-sky-50 bg-white text-slate-700 border-2 border-sky-100'
+                }`;
+
+                li.innerHTML = `
+                    <div class="flex items-center space-x-3 truncate flex-1 mr-2 cursor-pointer btn-select">
+                        <div class="w-7 h-7 rounded-lg flex items-center justify-center shrink-0 ${
+                            isCurrent ? 'bg-pink-500 text-white' : 'bg-sky-100 text-sky-700 group-hover:bg-sky-200'
+                        }">
+                            ${isCurrent && state.isPlaying 
+                                ? '<svg class="w-4 h-4 animate-pulse pointer-events-none" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2"><path d="M11 5L6 9H2v6h4l5 4V5zM19.07 4.93a10 10 0 010 14.14M15.54 8.46a5 5 0 010 7.07"/></svg>' 
+                                : `<span class="text-xs font-mono font-bold pointer-events-none">${index + 1}</span>`}
+                        </div>
+                        <div class="truncate pointer-events-none">
+                            <p class="text-sm font-medium truncate ${isCurrent ? 'text-pink-600 font-black' : ''}">${escapeHtml(track.name)}</p>
+                            <p class="text-[11px] text-slate-500 truncate">${formatTime(track.duration || 0)}</p>
+                        </div>
+                    </div>
+
+                    <div class="flex items-center space-x-1 shrink-0">
+                        <button type="button" class="btn-move-up p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition ${isFirst ? 'opacity-20 cursor-not-allowed' : ''}" 
+                                title="上に移動" ${isFirst ? 'disabled' : ''}>
+                            <svg class="w-4 h-4 pointer-events-none" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2"><path d="M5 15l7-7 7 7"/></svg>
+                        </button>
+                        
+                        <button type="button" class="btn-move-down p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition ${isLast ? 'opacity-20 cursor-not-allowed' : ''}" 
+                                title="下に移動" ${isLast ? 'disabled' : ''}>
+                            <svg class="w-4 h-4 pointer-events-none" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2"><path d="M19 9l-7 7-7-7"/></svg>
+                        </button>
+
+                        <div class="w-px h-4 bg-slate-800 mx-1"></div>
+
+                        <button type="button" class="btn-delete p-1.5 text-slate-400 hover:text-red-400 rounded-lg hover:bg-slate-800 transition" title="リストから削除">
+                            <svg class="w-4 h-4 pointer-events-none" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2"><path d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
+                        </button>
+                    </div>
+                `;
+
+                addTapListener(li.querySelector('.btn-select'), () => {
+                    selectTrack(index, true);
+                });
+
+                addTapListener(li.querySelector('.btn-move-up'), () => {
+                    moveTrack(index, index - 1);
+                });
+
+                addTapListener(li.querySelector('.btn-move-down'), () => {
+                    moveTrack(index, index + 1);
+                });
+
+                addTapListener(li.querySelector('.btn-delete'), () => {
+                    removeTrack(index);
+                });
+
+                ul.appendChild(li);
+            });
+
+            playlistContainer.appendChild(ul);
+        }
+
+        function selectTrack(index, autoPlay = true) {
+            if (index < 0 || index >= state.playlist.length) return;
+
+            state.currentIndex = index;
+            const track = state.playlist[index];
+
+            audio.src = track.url;
+            currentTitle.textContent = track.name;
+            currentArtist.textContent = `トラック ${index + 1} / ${state.playlist.length}`;
+
+            renderPlaylist();
+
+            if (autoPlay) {
+                playAudio();
+            } else {
+                pauseAudio();
+            }
+        }
+
+        function removeTrack(index) {
+            const isCurrent = index === state.currentIndex;
+            URL.revokeObjectURL(state.playlist[index].url);
+            state.playlist.splice(index, 1);
+
+            updateShuffleOrder();
+
+            if (state.playlist.length === 0) {
+                state.currentIndex = -1;
+                audio.src = '';
+                pauseAudio();
+                currentTitle.textContent = 'まだ きょくを えらんでいません';
+                currentArtist.textContent = 'したのボタンから おんがくを いれてね';
+            } else if (isCurrent) {
+                const nextIndex = index >= state.playlist.length ? 0 : index;
+                selectTrack(nextIndex, state.isPlaying);
+            } else if (index < state.currentIndex) {
+                state.currentIndex--;
+            }
+
+            renderPlaylist();
+            updatePlaylistStats();
+        }
+
+        function clearPlaylist() {
+            if (state.playlist.length === 0) return;
+            state.playlist.forEach(t => URL.revokeObjectURL(t.url));
+            state.playlist = [];
+            state.currentIndex = -1;
+            audio.src = '';
+            pauseAudio();
+            currentTitle.textContent = 'まだ きょくを えらんでいません';
+            currentArtist.textContent = 'したのボタンから おんがくを いれてね';
+            renderPlaylist();
+            updatePlaylistStats();
+        }
+
+        function togglePlay() {
+            if (state.playlist.length === 0) return;
+            if (state.currentIndex === -1) {
+                selectTrack(0, true);
+                return;
+            }
+
+            if (state.isPlaying) {
+                pauseAudio();
+            } else {
+                playAudio();
+            }
+        }
+
+        function playAudio() {
+            if (!audio.src) return;
+            
+            initAudioContext();
+            if (audioCtx && audioCtx.state === 'suspended') {
+                audioCtx.resume();
+            }
+
+            audio.play().then(() => {
+                state.isPlaying = true;
+                iconPlay.classList.add('hidden');
+                iconPause.classList.remove('hidden');
+                vinylDisc.classList.remove('paused-spin');
+                renderPlaylist();
+            }).catch(err => {
+                console.error("再生エラー:", err);
+            });
+        }
+
+        function pauseAudio() {
+            audio.pause();
+            state.isPlaying = false;
+            iconPlay.classList.remove('hidden');
+            iconPause.classList.add('hidden');
+            vinylDisc.classList.add('paused-spin');
+            renderPlaylist();
+        }
+
+        function playNext() {
+            if (state.playlist.length === 0) return;
+
+            if (state.isShuffle) {
+                if (state.shuffleOrder.length !== state.playlist.length) {
+                    updateShuffleOrder();
+                }
+                let currentShuffleIdx = state.shuffleOrder.indexOf(state.currentIndex);
+                if (currentShuffleIdx === -1) currentShuffleIdx = 0;
+                let nextShuffleIdx = (currentShuffleIdx + 1) % state.shuffleOrder.length;
+                selectTrack(state.shuffleOrder[nextShuffleIdx], true);
+            } else {
+                let nextIndex = state.currentIndex + 1;
+                if (nextIndex >= state.playlist.length) {
+                    nextIndex = 0;
+                }
+                selectTrack(nextIndex, true);
+            }
+        }
+
+        function playPrevious() {
+            if (state.playlist.length === 0) return;
+
+            if (audio.currentTime > 3) {
+                audio.currentTime = 0;
+                return;
+            }
+
+            if (state.isShuffle) {
+                if (state.shuffleOrder.length !== state.playlist.length) {
+                    updateShuffleOrder();
+                }
+                let currentShuffleIdx = state.shuffleOrder.indexOf(state.currentIndex);
+                if (currentShuffleIdx === -1) currentShuffleIdx = 0;
+                let prevShuffleIdx = (currentShuffleIdx - 1 + state.shuffleOrder.length) % state.shuffleOrder.length;
+                selectTrack(state.shuffleOrder[prevShuffleIdx], true);
+            } else {
+                let prevIndex = state.currentIndex - 1;
+                if (prevIndex < 0) {
+                    prevIndex = state.playlist.length - 1;
+                }
+                selectTrack(prevIndex, true);
+            }
+        }
+
+        function onTrackEnded() {
+            if (state.repeatMode === 2) {
+                audio.currentTime = 0;
+                playAudio();
+            } else if (state.repeatMode === 1) {
+                playNext();
+            } else {
+                if (state.isShuffle) {
+                    let currentShuffleIdx = state.shuffleOrder.indexOf(state.currentIndex);
+                    if (currentShuffleIdx < state.shuffleOrder.length - 1) {
+                        playNext();
+                    } else {
+                        pauseAudio();
+                        audio.currentTime = 0;
+                    }
+                } else {
+                    if (state.currentIndex < state.playlist.length - 1) {
+                        playNext();
+                    } else {
+                        pauseAudio();
+                        audio.currentTime = 0;
+                    }
+                }
+            }
+        }
+
+        // シャッフル切り替え
+        function toggleShuffle() {
+            state.isShuffle = !state.isShuffle;
+            if (state.isShuffle) {
+                updateShuffleOrder();
+            }
+            updateModeButtonsUI();
+        }
+
+        function updateShuffleOrder() {
+            state.shuffleOrder = Array.from({ length: state.playlist.length }, (_, i) => i);
+            for (let i = state.shuffleOrder.length - 1; i > 0; i--) {
+                const j = Math.floor(Math.random() * (i + 1));
+                [state.shuffleOrder[i], state.shuffleOrder[j]] = [state.shuffleOrder[j], state.shuffleOrder[i]];
+            }
+        }
+
+        // リピートモード切り替え (0: オフ -> 1: 全曲 -> 2: 1曲)
+        function toggleRepeat() {
+            state.repeatMode = (state.repeatMode + 1) % 3;
+            updateModeButtonsUI();
+        }
+
+        // ボタンの表示更新
+        function updateModeButtonsUI() {
+            // シャッフルUI
+            if (state.isShuffle) {
+                btnShuffle.className = 'relative z-30 flex flex-1 sm:flex-none items-center justify-center gap-1.5 min-h-[44px] px-3 py-2 rounded-lg border border-indigo-400 bg-indigo-600 text-white shadow-lg shadow-indigo-600/40 transition cursor-pointer select-none touch-manipulation';
+                shuffleLabel.textContent = 'ばらばら ON';
+            } else {
+                btnShuffle.className = 'relative z-30 flex flex-1 sm:flex-none items-center justify-center gap-1.5 min-h-[44px] px-3 py-2 rounded-lg border border-slate-700 bg-slate-800/80 text-slate-400 transition cursor-pointer select-none touch-manipulation';
+                shuffleLabel.textContent = 'ばらばら OFF';
+            }
+
+            // リピートUI
+            if (state.repeatMode === 0) {
+                btnRepeat.className = 'relative z-30 flex flex-1 sm:flex-none items-center justify-center gap-1.5 min-h-[44px] px-3 py-2 rounded-lg border border-slate-700 bg-slate-800/80 text-slate-400 transition cursor-pointer select-none touch-manipulation';
+                repeatLabel.textContent = 'くりかえし OFF';
+            } else if (state.repeatMode === 1) {
+                btnRepeat.className = 'relative z-30 flex flex-1 sm:flex-none items-center justify-center gap-1.5 min-h-[44px] px-3 py-2 rounded-lg border border-indigo-400 bg-indigo-600 text-white shadow-lg shadow-indigo-600/40 transition cursor-pointer select-none touch-manipulation';
+                repeatLabel.textContent = 'ぜんぶ くりかえす';
+            } else if (state.repeatMode === 2) {
+                btnRepeat.className = 'relative z-30 flex flex-1 sm:flex-none items-center justify-center gap-1.5 min-h-[44px] px-3 py-2 rounded-lg border border-cyan-400 bg-cyan-600 text-white shadow-lg shadow-cyan-600/40 transition cursor-pointer select-none touch-manipulation';
+                repeatLabel.textContent = 'このきょく くりかえす';
+            }
+        }
+
+        function updateProgress() {
+            if (!audio.duration) return;
+            const pct = (audio.currentTime / audio.duration) * 100;
+            seekBar.value = pct;
+            timeCurrent.textContent = formatTime(audio.currentTime);
+        }
+
+        function onMetadataLoaded() {
+            timeDuration.textContent = formatTime(audio.duration);
+        }
+
+        function updateVolumeUI() {
+            if (state.isMuted || state.volume === 0) {
+                iconVolOn.classList.add('hidden');
+                iconVolOff.classList.remove('hidden');
+            } else {
+                iconVolOn.classList.remove('hidden');
+                iconVolOff.classList.add('hidden');
+            }
+        }
+
+        function updatePlaylistStats() {
+            const totalTracks = state.playlist.length;
+            const totalSec = state.playlist.reduce((acc, t) => acc + (t.duration || 0), 0);
+            playlistStats.textContent = `${totalTracks} 曲 (${formatTime(totalSec)})`;
+        }
+
+        function drawVisualizer() {
+            requestAnimationFrame(drawVisualizer);
+            
+            if (!analyser) return;
+
+            const bufferLength = analyser.frequencyBinCount;
+            const dataArray = new Uint8Array(bufferLength);
+            analyser.getByteFrequencyData(dataArray);
+
+            canvasCtx.clearRect(0, 0, canvas.width, canvas.height);
+
+            const barWidth = (canvas.width / bufferLength) * 2;
+            let barHeight;
+            let x = 0;
+
+            for (let i = 0; i < bufferLength; i++) {
+                barHeight = (dataArray[i] / 255) * (canvas.height / 2);
+
+                const gradient = canvasCtx.createLinearGradient(0, canvas.height, 0, 0);
+                gradient.addColorStop(0, 'rgba(79, 70, 229, 0.2)');
+                gradient.addColorStop(0.5, 'rgba(99, 102, 241, 0.6)');
+                gradient.addColorStop(1, 'rgba(56, 189, 248, 0.8)');
+
+                canvasCtx.fillStyle = gradient;
+                canvasCtx.fillRect(x, (canvas.height - barHeight) / 2, barWidth - 2, barHeight);
+
+                x += barWidth;
+            }
+        }
+
+        function formatTime(seconds) {
+            if (isNaN(seconds) || seconds === 0) return '0:00';
+            const m = Math.floor(seconds / 60);
+            const s = Math.floor(seconds % 60);
+            return `${m}:${s < 10 ? '0' : ''}${s}`;
+        }
+
+        function escapeHtml(str) {
+            return str.replace(/[&<>"']/g, function(m) {
+                return {
+                    '&': '&amp;',
+                    '<': '&lt;',
+                    '>': '&gt;',
+                    '"': '&quot;',
+                    "'": '&#039;'
+                }[m];
+            });
+        }
+    </script>
+</body>
+</html>
+
