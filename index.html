@@ -273,19 +273,140 @@
         const canvas = document.getElementById('visualizer');
         const canvasCtx = canvas.getContext('2d');
 
+        // ブラウザ内保存（IndexedDB）
+        const DB_NAME = 'wakuwaku-music-player-db';
+        const DB_VERSION = 1;
+        const TRACK_STORE = 'tracks';
+        const SETTINGS_STORE = 'settings';
+        let db = null;
+        let restoredTime = 0;
+        let lastSettingsSave = 0;
+
+        function openDatabase() {
+            return new Promise((resolve, reject) => {
+                if (!('indexedDB' in window)) {
+                    reject(new Error('IndexedDB is not supported'));
+                    return;
+                }
+                const request = indexedDB.open(DB_NAME, DB_VERSION);
+                request.onupgradeneeded = () => {
+                    const database = request.result;
+                    if (!database.objectStoreNames.contains(TRACK_STORE)) {
+                        database.createObjectStore(TRACK_STORE, { keyPath: 'id' });
+                    }
+                    if (!database.objectStoreNames.contains(SETTINGS_STORE)) {
+                        database.createObjectStore(SETTINGS_STORE, { keyPath: 'key' });
+                    }
+                };
+                request.onsuccess = () => resolve(request.result);
+                request.onerror = () => reject(request.error);
+            });
+        }
+
+        function requestToPromise(request) {
+            return new Promise((resolve, reject) => {
+                request.onsuccess = () => resolve(request.result);
+                request.onerror = () => reject(request.error);
+            });
+        }
+
+        async function savePlaylistToDatabase() {
+            if (!db) return;
+            const tx = db.transaction([TRACK_STORE], 'readwrite');
+            const store = tx.objectStore(TRACK_STORE);
+            store.clear();
+            state.playlist.forEach((track, order) => {
+                store.put({
+                    id: track.id,
+                    name: track.name,
+                    rawName: track.rawName,
+                    file: track.file,
+                    duration: track.duration || 0,
+                    order
+                });
+            });
+            await new Promise((resolve, reject) => {
+                tx.oncomplete = resolve;
+                tx.onerror = () => reject(tx.error);
+                tx.onabort = () => reject(tx.error);
+            });
+            await saveSettingsToDatabase();
+        }
+
+        async function saveSettingsToDatabase() {
+            if (!db) return;
+            const currentTrack = state.currentIndex >= 0 ? state.playlist[state.currentIndex] : null;
+            const tx = db.transaction([SETTINGS_STORE], 'readwrite');
+            tx.objectStore(SETTINGS_STORE).put({
+                key: 'player',
+                currentTrackId: currentTrack ? currentTrack.id : null,
+                currentTime: Number.isFinite(audio.currentTime) ? audio.currentTime : 0,
+                volume: state.volume,
+                isMuted: state.isMuted,
+                isShuffle: state.isShuffle,
+                repeatMode: state.repeatMode
+            });
+        }
+
+        async function restoreFromDatabase() {
+            if (!db) return;
+            const trackTx = db.transaction([TRACK_STORE], 'readonly');
+            const savedTracks = await requestToPromise(trackTx.objectStore(TRACK_STORE).getAll());
+            const settingsTx = db.transaction([SETTINGS_STORE], 'readonly');
+            const settings = await requestToPromise(settingsTx.objectStore(SETTINGS_STORE).get('player'));
+
+            savedTracks.sort((a, b) => (a.order || 0) - (b.order || 0));
+            state.playlist = savedTracks.map(track => ({
+                ...track,
+                url: URL.createObjectURL(track.file)
+            }));
+
+            if (settings) {
+                state.volume = typeof settings.volume === 'number' ? settings.volume : 0.8;
+                state.isMuted = Boolean(settings.isMuted);
+                state.isShuffle = Boolean(settings.isShuffle);
+                state.repeatMode = Number.isInteger(settings.repeatMode) ? settings.repeatMode : 0;
+                restoredTime = Number(settings.currentTime) || 0;
+                state.currentIndex = state.playlist.findIndex(track => track.id === settings.currentTrackId);
+            }
+
+            if (state.currentIndex < 0 && state.playlist.length > 0) state.currentIndex = 0;
+            audio.volume = state.volume;
+            audio.muted = state.isMuted;
+            volumeBar.value = state.volume;
+            updateVolumeUI();
+            updateModeButtonsUI();
+            updateShuffleOrder();
+            renderPlaylist();
+            updatePlaylistStats();
+
+            if (state.currentIndex >= 0) {
+                selectTrack(state.currentIndex, false, false);
+            }
+        }
+
         // Web Audio API用変数
         let audioCtx = null;
         let analyser = null;
         let sourceNode = null;
 
         // 初期化
-        window.addEventListener('DOMContentLoaded', () => {
+        window.addEventListener('DOMContentLoaded', async () => {
             setupEventListeners();
             resizeCanvas();
             updateModeButtonsUI();
+            try {
+                db = await openDatabase();
+                await restoreFromDatabase();
+            } catch (error) {
+                console.warn('前回の曲を復元できませんでした:', error);
+            }
         });
 
         window.addEventListener('resize', resizeCanvas);
+        window.addEventListener('pagehide', () => {
+            saveSettingsToDatabase().catch(() => {});
+        });
 
         function resizeCanvas() {
             canvas.width = canvas.parentElement.clientWidth;
@@ -341,7 +462,14 @@
             addTapListener(btnClearAll, clearPlaylist);
 
             // オーディオイベント
-            audio.addEventListener('timeupdate', updateProgress);
+            audio.addEventListener('timeupdate', () => {
+                updateProgress();
+                const now = Date.now();
+                if (now - lastSettingsSave > 5000) {
+                    lastSettingsSave = now;
+                    saveSettingsToDatabase().catch(() => {});
+                }
+            });
             audio.addEventListener('loadedmetadata', onMetadataLoaded);
             audio.addEventListener('ended', onTrackEnded);
 
@@ -359,12 +487,14 @@
                 audio.volume = state.volume;
                 state.isMuted = state.volume === 0;
                 updateVolumeUI();
+                saveSettingsToDatabase().catch(() => {});
             });
 
             addTapListener(btnMute, () => {
                 state.isMuted = !state.isMuted;
                 audio.muted = state.isMuted;
                 updateVolumeUI();
+                saveSettingsToDatabase().catch(() => {});
             });
         }
 
@@ -412,6 +542,7 @@
                     track.duration = tempAudio.duration;
                     updatePlaylistStats();
                     renderPlaylist();
+                    savePlaylistToDatabase().catch(() => {});
                 });
 
                 newTracks.push(track);
@@ -427,6 +558,7 @@
                 if (wasEmpty && state.playlist.length > 0) {
                     selectTrack(0, false);
                 }
+                savePlaylistToDatabase().catch(error => console.warn('曲を保存できませんでした:', error));
             }
         }
 
@@ -449,6 +581,7 @@
 
             updateShuffleOrder();
             renderPlaylist();
+            savePlaylistToDatabase().catch(() => {});
         }
 
         // プレイリスト描画
@@ -535,7 +668,7 @@
             playlistContainer.appendChild(ul);
         }
 
-        function selectTrack(index, autoPlay = true) {
+        function selectTrack(index, autoPlay = true, saveSelection = true) {
             if (index < 0 || index >= state.playlist.length) return;
 
             state.currentIndex = index;
@@ -546,6 +679,7 @@
             currentArtist.textContent = `トラック ${index + 1} / ${state.playlist.length}`;
 
             renderPlaylist();
+            if (saveSelection) saveSettingsToDatabase().catch(() => {});
 
             if (autoPlay) {
                 playAudio();
@@ -576,6 +710,7 @@
 
             renderPlaylist();
             updatePlaylistStats();
+            savePlaylistToDatabase().catch(() => {});
         }
 
         function clearPlaylist() {
@@ -589,6 +724,7 @@
             currentArtist.textContent = 'したのボタンから おんがくを いれてね';
             renderPlaylist();
             updatePlaylistStats();
+            savePlaylistToDatabase().catch(() => {});
         }
 
         function togglePlay() {
@@ -711,6 +847,7 @@
                 updateShuffleOrder();
             }
             updateModeButtonsUI();
+            saveSettingsToDatabase().catch(() => {});
         }
 
         function updateShuffleOrder() {
@@ -725,6 +862,7 @@
         function toggleRepeat() {
             state.repeatMode = (state.repeatMode + 1) % 3;
             updateModeButtonsUI();
+            saveSettingsToDatabase().catch(() => {});
         }
 
         // ボタンの表示更新
@@ -760,6 +898,11 @@
 
         function onMetadataLoaded() {
             timeDuration.textContent = formatTime(audio.duration);
+            if (restoredTime > 0 && Number.isFinite(audio.duration)) {
+                audio.currentTime = Math.min(restoredTime, Math.max(0, audio.duration - 0.25));
+                restoredTime = 0;
+                updateProgress();
+            }
         }
 
         function updateVolumeUI() {
